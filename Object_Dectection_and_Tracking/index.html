@@ -1,0 +1,767 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ObjectAI — Real-Time Detection & Tracking</title>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    /* ── Design tokens ────────────────────────────────────────────────────── */
+    :root {
+      --bg:        #050810;
+      --surface:   #0D1117;
+      --surface2:  #161B25;
+      --border:    #1E2736;
+      --accent:    #00D4FF;   /* electric cyan — surveillance monitor aesthetic */
+      --accent2:   #0080FF;
+      --green:     #00FF88;
+      --amber:     #FFB800;
+      --red:       #FF4455;
+      --text:      #CDD6E8;
+      --muted:     #4A5568;
+      --font-ui:   'Inter', sans-serif;
+      --font-data: 'IBM Plex Mono', monospace;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-ui);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* Scan-line overlay — signature element */
+    body::after {
+      content: '';
+      position: fixed; inset: 0;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(0, 212, 255, 0.012) 2px,
+        rgba(0, 212, 255, 0.012) 4px
+      );
+      pointer-events: none;
+      z-index: 9999;
+    }
+
+    /* ── Layout ──────────────────────────────────────────────────────────── */
+    .container { max-width: 1280px; margin: 0 auto; padding: 0 20px; }
+
+    /* ── Header ──────────────────────────────────────────────────────────── */
+    header {
+      border-bottom: 1px solid var(--border);
+      padding: 14px 0;
+    }
+    .nav {
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .logo {
+      display: flex; align-items: center; gap: 10px;
+    }
+    .logo-icon {
+      width: 32px; height: 32px; border: 2px solid var(--accent);
+      border-radius: 6px; display: grid; place-items: center;
+      position: relative;
+    }
+    .logo-icon::before, .logo-icon::after {
+      content: ''; position: absolute;
+      width: 8px; height: 8px; border: 1px solid var(--accent);
+    }
+    .logo-icon::before { top: 2px; left: 2px; border-right: none; border-bottom: none; }
+    .logo-icon::after  { bottom: 2px; right: 2px; border-left: none; border-top: none; }
+    .logo-dot { width: 6px; height: 6px; background: var(--accent); border-radius: 50%; animation: blink 1.4s step-end infinite; }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+    .logo-text {
+      font-size: 1.05rem; font-weight: 700; letter-spacing: 0.04em;
+      color: var(--text);
+    }
+    .logo-text span { color: var(--accent); }
+
+    .nav-status {
+      display: flex; align-items: center; gap: 20px;
+    }
+    .status-pill {
+      display: flex; align-items: center; gap: 7px;
+      font-family: var(--font-data); font-size: 0.68rem;
+      color: var(--muted); border: 1px solid var(--border);
+      padding: 5px 12px; border-radius: 4px;
+      letter-spacing: 0.06em;
+    }
+    .status-pill .dot {
+      width: 6px; height: 6px; border-radius: 50%;
+    }
+    .dot-green  { background: var(--green);  box-shadow: 0 0 6px var(--green); }
+    .dot-red    { background: var(--red);    box-shadow: 0 0 6px var(--red); }
+    .dot-amber  { background: var(--amber);  box-shadow: 0 0 6px var(--amber); }
+
+    /* ── Hero strip ──────────────────────────────────────────────────────── */
+    .hero-strip {
+      padding: 36px 0 28px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 28px;
+    }
+    .hero-eyebrow {
+      font-family: var(--font-data); font-size: 0.65rem;
+      color: var(--accent); letter-spacing: 0.18em; text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+    .hero-strip h1 {
+      font-size: clamp(1.7rem, 3.5vw, 2.8rem);
+      font-weight: 700; letter-spacing: -0.03em; line-height: 1.15;
+      margin-bottom: 10px;
+    }
+    .hero-strip h1 em { font-style: normal; color: var(--accent); }
+    .hero-strip p { font-size: 0.9rem; color: var(--muted); max-width: 540px; line-height: 1.7; }
+
+    /* Pipeline badges */
+    .pipeline {
+      display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px;
+    }
+    .badge {
+      font-family: var(--font-data); font-size: 0.68rem;
+      color: var(--text); background: var(--surface2);
+      border: 1px solid var(--border); border-radius: 4px;
+      padding: 5px 12px; letter-spacing: 0.05em;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .badge .num {
+      color: var(--accent); font-weight: 600;
+    }
+
+    /* ── Main grid ───────────────────────────────────────────────────────── */
+    .main-grid {
+      display: grid;
+      grid-template-columns: 1fr 320px;
+      gap: 16px;
+      align-items: start;
+    }
+    @media (max-width: 900px) {
+      .main-grid { grid-template-columns: 1fr; }
+    }
+
+    /* ── Panel ───────────────────────────────────────────────────────────── */
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .panel-head {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 11px 16px;
+      border-bottom: 1px solid var(--border);
+      font-family: var(--font-data); font-size: 0.7rem;
+      color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase;
+    }
+    .panel-head .live-tag {
+      display: flex; align-items: center; gap: 6px;
+      color: var(--red); font-size: 0.65rem;
+    }
+
+    /* ── Video / canvas area ─────────────────────────────────────────────── */
+    .video-wrap {
+      position: relative;
+      background: #000;
+      aspect-ratio: 16/9;
+      overflow: hidden;
+    }
+    #videoEl {
+      width: 100%; height: 100%;
+      object-fit: cover; display: block;
+    }
+    #canvasOverlay {
+      position: absolute; inset: 0;
+      width: 100%; height: 100%;
+      pointer-events: none;
+    }
+    .video-wrap .corner {
+      position: absolute; width: 20px; height: 20px;
+      border-color: var(--accent); border-style: solid;
+      opacity: 0.6;
+    }
+    .corner.tl { top: 10px; left: 10px;  border-width: 2px 0 0 2px; }
+    .corner.tr { top: 10px; right: 10px; border-width: 2px 2px 0 0; }
+    .corner.bl { bottom: 10px; left: 10px;  border-width: 0 0 2px 2px; }
+    .corner.br { bottom: 10px; right: 10px; border-width: 0 2px 2px 0; }
+
+    /* Crosshair centre */
+    .crosshair {
+      position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 30px; height: 30px; opacity: 0.2;
+      pointer-events: none;
+    }
+    .crosshair::before, .crosshair::after {
+      content: ''; position: absolute; background: var(--accent);
+    }
+    .crosshair::before { top: 50%; left: 0; right: 0; height: 1px; transform: translateY(-50%); }
+    .crosshair::after  { left: 50%; top: 0; bottom: 0; width: 1px;  transform: translateX(-50%); }
+
+    /* Empty state */
+    .empty-state {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 14px; color: var(--muted);
+    }
+    .empty-state svg { opacity: 0.15; }
+    .empty-state p { font-family: var(--font-data); font-size: 0.75rem; letter-spacing: 0.08em; }
+
+    /* ── Controls row ────────────────────────────────────────────────────── */
+    .controls-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 12px 16px;
+      border-top: 1px solid var(--border);
+      flex-wrap: wrap;
+    }
+    .btn {
+      display: flex; align-items: center; gap: 7px;
+      padding: 9px 18px;
+      border-radius: 5px; border: none; cursor: pointer;
+      font-family: var(--font-ui); font-size: 0.82rem; font-weight: 600;
+      transition: opacity 0.15s, transform 0.1s;
+      letter-spacing: 0.01em;
+    }
+    .btn:hover  { opacity: 0.88; transform: translateY(-1px); }
+    .btn:active { transform: translateY(0); }
+    .btn:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
+
+    .btn-primary { background: var(--accent); color: #050810; }
+    .btn-danger  { background: var(--red);   color: #fff; }
+    .btn-ghost   {
+      background: transparent; color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .btn-ghost:hover { border-color: var(--accent); opacity: 1; }
+
+    /* Conf slider */
+    .conf-wrap {
+      display: flex; align-items: center; gap: 10px;
+      margin-left: auto;
+      font-family: var(--font-data); font-size: 0.7rem; color: var(--muted);
+    }
+    .conf-wrap input[type="range"] {
+      width: 100px;
+      -webkit-appearance: none;
+      -moz-appearance: none;
+      appearance: none;
+      height: 3px;
+      background: var(--border);
+      border-radius: 2px; outline: none; cursor: pointer;
+    }
+    .conf-wrap input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 14px; height: 14px;
+      border-radius: 50%; background: var(--accent); cursor: pointer;
+    }
+    .conf-wrap input[type="range"]::-moz-range-thumb {
+      width: 14px; height: 14px;
+      border-radius: 50%; background: var(--accent); cursor: pointer; border: none;
+    }
+
+    /* ── Upload strip ────────────────────────────────────────────────────── */
+    .upload-strip {
+      display: flex; gap: 10px; align-items: center;
+      padding: 12px 16px;
+      border-top: 1px solid var(--border);
+      background: var(--surface2);
+    }
+    .upload-strip label {
+      font-size: 0.78rem; color: var(--muted);
+    }
+    .upload-strip input[type="file"] {
+      font-size: 0.78rem; color: var(--text);
+      background: transparent; border: none; outline: none;
+      cursor: pointer;
+    }
+
+    /* ── Sidebar ─────────────────────────────────────────────────────────── */
+    .sidebar { display: flex; flex-direction: column; gap: 14px; }
+
+    /* Stats strip */
+    .stats-grid {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 1px; background: var(--border);
+    }
+    .stat-cell {
+      background: var(--surface2); padding: 14px 16px;
+    }
+    .stat-cell .val {
+      font-family: var(--font-data); font-size: 1.5rem;
+      font-weight: 600; color: var(--accent);
+      line-height: 1;
+    }
+    .stat-cell .lbl {
+      font-size: 0.68rem; color: var(--muted); margin-top: 4px;
+      text-transform: uppercase; letter-spacing: 0.06em;
+    }
+
+    /* Object list */
+    .obj-list { max-height: 280px; overflow-y: auto; }
+    .obj-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 9px 16px;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.8rem;
+      transition: background 0.1s;
+    }
+    .obj-row:hover { background: var(--surface2); }
+    .obj-swatch {
+      width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0;
+    }
+    .obj-label { flex: 1; font-weight: 500; }
+    .obj-id {
+      font-family: var(--font-data); font-size: 0.68rem;
+      color: var(--accent); background: rgba(0,212,255,0.08);
+      padding: 2px 7px; border-radius: 3px;
+    }
+    .obj-conf { font-family: var(--font-data); font-size: 0.68rem; color: var(--muted); }
+
+    /* Status log */
+    .log-body {
+      padding: 12px 16px; max-height: 140px; overflow-y: auto;
+      font-family: var(--font-data); font-size: 0.7rem; line-height: 1.8;
+    }
+    .log-entry { display: flex; gap: 10px; }
+    .log-time { color: var(--muted); flex-shrink: 0; }
+    .log-ok   { color: var(--green); }
+    .log-err  { color: var(--red); }
+    .log-info { color: var(--accent); }
+
+    /* Model info */
+    .model-grid { padding: 14px 16px; }
+    .model-row {
+      display: flex; justify-content: space-between;
+      padding: 6px 0; border-bottom: 1px solid var(--border);
+      font-size: 0.78rem;
+    }
+    .model-row:last-child { border-bottom: none; }
+    .model-row .k { color: var(--muted); }
+    .model-row .v { font-family: var(--font-data); font-size: 0.72rem; color: var(--text); }
+
+    /* ── Status bar ──────────────────────────────────────────────────────── */
+    .status-bar {
+      position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 20px; border-radius: 6px;
+      font-size: 0.82rem; font-family: var(--font-data);
+      backdrop-filter: blur(12px);
+      transition: opacity 0.3s; opacity: 0;
+      z-index: 1000; pointer-events: none;
+      white-space: nowrap;
+    }
+    .status-bar.show { opacity: 1; }
+    .status-bar.ok   { background: rgba(0,255,136,0.12); border: 1px solid rgba(0,255,136,0.3); color: var(--green); }
+    .status-bar.err  { background: rgba(255,68,85,0.12);  border: 1px solid rgba(255,68,85,0.3);  color: var(--red); }
+    .status-bar.info { background: rgba(0,212,255,0.12); border: 1px solid rgba(0,212,255,0.3); color: var(--accent); }
+
+    /* ── Scrollbar ───────────────────────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    /* ── Footer ──────────────────────────────────────────────────────────── */
+    footer {
+      margin-top: 40px; padding: 20px 0;
+      border-top: 1px solid var(--border);
+      font-family: var(--font-data); font-size: 0.68rem;
+      color: var(--muted); text-align: center; letter-spacing: 0.06em;
+    }
+  </style>
+</head>
+<body>
+
+<!-- Header -->
+<header>
+  <div class="container">
+    <nav class="nav">
+      <div class="logo">
+        <div class="logo-icon"><div class="logo-dot"></div></div>
+        <span class="logo-text">Object<span>AI</span></span>
+      </div>
+      <div class="nav-status">
+        <div class="status-pill">
+          <div class="dot" id="serverDot" style="background:var(--muted)"></div>
+          <span id="serverLabel">CHECKING…</span>
+        </div>
+        <div class="status-pill">
+          <div class="dot dot-amber"></div>
+          <span id="modelLabel">YOLO / DEMO</span>
+        </div>
+      </div>
+    </nav>
+  </div>
+</header>
+
+<!-- Hero -->
+<div class="container">
+  <div class="hero-strip">
+    <div class="hero-eyebrow">Computer Vision · Real-Time Inference</div>
+    <h1>Object Detection<br>&amp; <em>Tracking</em></h1>
+    <p>Stream webcam or upload video frames. YOLOv8 detects objects; SORT assigns persistent tracking IDs across frames.</p>
+    <div class="pipeline">
+      <div class="badge"><span class="num">01</span> Capture frame (OpenCV)</div>
+      <div class="badge"><span class="num">02</span> Detect (YOLOv8)</div>
+      <div class="badge"><span class="num">03</span> Track (SORT)</div>
+      <div class="badge"><span class="num">04</span> Annotate &amp; display</div>
+    </div>
+  </div>
+
+  <!-- Main grid -->
+  <div class="main-grid" style="padding-bottom: 40px">
+
+    <!-- Video panel -->
+    <div>
+      <div class="panel">
+        <div class="panel-head">
+          <span>LIVE FEED</span>
+          <div class="live-tag" id="liveTag" style="display:none">
+            <div class="dot dot-red"></div> REC
+          </div>
+        </div>
+
+        <div class="video-wrap" id="videoWrap">
+          <video id="videoEl" autoplay muted playsinline style="display:none"></video>
+          <canvas id="canvasOverlay"></canvas>
+          <div class="corner tl"></div><div class="corner tr"></div>
+          <div class="corner bl"></div><div class="corner br"></div>
+          <div class="crosshair"></div>
+
+          <div class="empty-state" id="emptyState">
+            <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+              <path d="M15 10l4.553-2.069A1 1 0 0121 8.87v6.26a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h10a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"/>
+            </svg>
+            <p>START WEBCAM OR UPLOAD AN IMAGE</p>
+          </div>
+        </div>
+
+        <div class="controls-row">
+          <button class="btn btn-primary" id="startBtn" onclick="startWebcam()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+            Start Webcam
+          </button>
+          <button class="btn btn-danger" id="stopBtn" onclick="stopWebcam()" disabled>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
+            Stop
+          </button>
+          <button class="btn btn-ghost" onclick="resetTracker()">↺ Reset Tracker</button>
+          <div class="conf-wrap">
+            <span>CONF</span>
+            <input type="range" id="confSlider" min="10" max="90" value="40" step="5" oninput="updateConf(this.value)" />
+            <span id="confVal">40%</span>
+          </div>
+        </div>
+
+        <div class="upload-strip">
+          <label for="imgUpload">Upload image:</label>
+          <input type="file" id="imgUpload" accept="image/*" onchange="detectImage(this)" />
+        </div>
+      </div>
+    </div>
+
+    <!-- Sidebar -->
+    <div class="sidebar">
+
+      <!-- Stats -->
+      <div class="panel">
+        <div class="panel-head"><span>FRAME STATS</span></div>
+        <div class="stats-grid">
+          <div class="stat-cell"><div class="val" id="sCount">0</div><div class="lbl">Objects</div></div>
+          <div class="stat-cell"><div class="val" id="sFPS">—</div><div class="lbl">FPS</div></div>
+          <div class="stat-cell"><div class="val" id="sTracks">0</div><div class="lbl">Tracks</div></div>
+          <div class="stat-cell"><div class="val" id="sFrames">0</div><div class="lbl">Frames</div></div>
+        </div>
+      </div>
+
+      <!-- Detected objects -->
+      <div class="panel">
+        <div class="panel-head"><span>DETECTED OBJECTS</span></div>
+        <div class="obj-list" id="objList">
+          <div style="padding:20px 16px;font-size:0.78rem;color:var(--muted)">No detections yet.</div>
+        </div>
+      </div>
+
+      <!-- Log -->
+      <div class="panel">
+        <div class="panel-head"><span>SYSTEM LOG</span></div>
+        <div class="log-body" id="logBody"></div>
+      </div>
+
+      <!-- Model info -->
+      <div class="panel" id="modelInfoPanel" style="display:none">
+        <div class="panel-head"><span>MODEL INFO</span></div>
+        <div class="model-grid" id="modelGrid"></div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<footer>
+  <div class="container">
+    OBJECT AI · YOLOV8 + SORT TRACKER · FLASK + OPENCV BACKEND
+  </div>
+</footer>
+
+<!-- Status toast -->
+<div class="status-bar" id="toast"></div>
+
+<script>
+  const API = 'http://localhost:5000/api';
+  let stream = null;
+  let detecting = false;
+  let frameCount = 0;
+  let lastFPSTime = performance.now();
+  let confThreshold = 0.4;
+  let animId = null;
+
+  // ── Toast ─────────────────────────────────────────────────────────────────
+  let toastTimer;
+  function toast(msg, type = 'info', dur = 3000) {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.className = 'status-bar show ' + type;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('show'), dur);
+  }
+
+  // ── Log ───────────────────────────────────────────────────────────────────
+  function log(msg, cls = 'log-info') {
+    const body = document.getElementById('logBody');
+    const time = new Date().toLocaleTimeString('en', { hour12: false });
+    const row = document.createElement('div');
+    row.className = 'log-entry';
+    row.innerHTML = `<span class="log-time">${time}</span><span class="${cls}">${msg}</span>`;
+    body.prepend(row);
+    while (body.children.length > 30) body.removeChild(body.lastChild);
+  }
+
+  // ── Health check ──────────────────────────────────────────────────────────
+  async function checkHealth() {
+    try {
+      const res = await fetch(`${API}/health`);
+      const d = await res.json();
+      const dot = document.getElementById('serverDot');
+      dot.style.background = 'var(--green)';
+      dot.style.boxShadow  = '0 0 6px var(--green)';
+      document.getElementById('serverLabel').textContent = 'SERVER ONLINE';
+      document.getElementById('modelLabel').textContent =
+        d.yolo_available ? 'YOLOV8N' : 'DEMO MODE';
+      log(`Server OK · ${d.model} · ${d.tracker}`, 'log-ok');
+      loadModelInfo();
+    } catch {
+      document.getElementById('serverLabel').textContent = 'SERVER OFFLINE';
+      log('Cannot reach backend — is app.py running?', 'log-err');
+      toast('Backend offline. Start app.py first.', 'err', 6000);
+    }
+  }
+
+  async function loadModelInfo() {
+    try {
+      const res = await fetch(`${API}/model_info`);
+      const d = await res.json();
+      const det = d.detector, trk = d.tracker;
+      const rows = [
+        ['Detector', det.name], ['Type', det.type],
+        ['Classes', det.classes], ['Input', det.input_size],
+        ['Params', det.params],  ['Tracker', trk.name],
+        ['IoU thr', trk.iou_threshold], ['Max misses', trk.max_misses],
+      ];
+      document.getElementById('modelGrid').innerHTML = rows.map(([k,v]) =>
+        `<div class="model-row"><span class="k">${k}</span><span class="v">${v}</span></div>`
+      ).join('');
+      document.getElementById('modelInfoPanel').style.display = '';
+    } catch {}
+  }
+
+  // ── Webcam ────────────────────────────────────────────────────────────────
+  async function startWebcam() {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
+      const vid = document.getElementById('videoEl');
+      vid.srcObject = stream;
+      vid.style.display = 'block';
+      document.getElementById('emptyState').style.display = 'none';
+      document.getElementById('liveTag').style.display = 'flex';
+      document.getElementById('startBtn').disabled = true;
+      document.getElementById('stopBtn').disabled = false;
+      log('Webcam started', 'log-ok');
+      toast('Webcam active', 'ok');
+      detecting = true;
+      requestAnimationFrame(detectLoop);
+    } catch (e) {
+      log('Webcam error: ' + e.message, 'log-err');
+      toast('Webcam blocked — check browser permissions', 'err');
+    }
+  }
+
+  function stopWebcam() {
+    detecting = false;
+    cancelAnimationFrame(animId);
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    stream = null;
+    const vid = document.getElementById('videoEl');
+    vid.srcObject = null; vid.style.display = 'none';
+    document.getElementById('emptyState').style.display = 'flex';
+    document.getElementById('liveTag').style.display = 'none';
+    document.getElementById('startBtn').disabled = false;
+    document.getElementById('stopBtn').disabled = true;
+    clearCanvas();
+    log('Webcam stopped', 'log-info');
+  }
+
+  // ── Capture frame → base64 ────────────────────────────────────────────────
+  function captureFrame(sourceEl) {
+    const cvs = document.createElement('canvas');
+    cvs.width  = sourceEl.videoWidth  || sourceEl.naturalWidth  || 640;
+    cvs.height = sourceEl.videoHeight || sourceEl.naturalHeight || 480;
+    cvs.getContext('2d').drawImage(sourceEl, 0, 0);
+    return cvs.toDataURL('image/jpeg', 0.85).split(',')[1];
+  }
+
+  // ── Detection loop ────────────────────────────────────────────────────────
+  let busy = false;
+  async function detectLoop() {
+    if (!detecting) return;
+    if (!busy) {
+      busy = true;
+      const vid = document.getElementById('videoEl');
+      if (vid.readyState >= 2) {
+        try {
+          await sendDetect(captureFrame(vid), vid.videoWidth, vid.videoHeight);
+        } catch {}
+      }
+      busy = false;
+    }
+    animId = requestAnimationFrame(detectLoop);
+  }
+
+  // ── Image upload ──────────────────────────────────────────────────────────
+  function detectImage(input) {
+    const file = input.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async e => {
+      const img = new Image();
+      img.onload = async () => {
+        // Draw onto canvas overlay
+        const wrap = document.getElementById('videoWrap');
+        const oc = document.getElementById('canvasOverlay');
+        oc.width  = img.naturalWidth;
+        oc.height = img.naturalHeight;
+        oc.getContext('2d').drawImage(img, 0, 0);
+        document.getElementById('emptyState').style.display = 'none';
+
+        const b64 = e.target.result.split(',')[1];
+        await sendDetect(b64, img.naturalWidth, img.naturalHeight);
+        toast('Image processed', 'ok');
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  }
+
+  // ── Core: send to backend ─────────────────────────────────────────────────
+  async function sendDetect(b64, srcW, srcH) {
+    const t0 = performance.now();
+    const res = await fetch(`${API}/detect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: b64, conf: confThreshold }),
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    const ms = Math.round(performance.now() - t0);
+
+    // Draw annotated frame
+    drawAnnotated(data.image);
+
+    // Update sidebar
+    updateSidebar(data, ms);
+
+    frameCount++;
+    document.getElementById('sFrames').textContent = frameCount;
+  }
+
+  // ── Draw annotated image ──────────────────────────────────────────────────
+  function drawAnnotated(b64) {
+    const img = new Image();
+    img.onload = () => {
+      const oc = document.getElementById('canvasOverlay');
+      const wrap = document.getElementById('videoWrap');
+      oc.width  = img.width;
+      oc.height = img.height;
+      oc.style.objectFit = 'cover';
+      const ctx = oc.getContext('2d');
+      ctx.clearRect(0, 0, oc.width, oc.height);
+      ctx.drawImage(img, 0, 0, oc.width, oc.height);
+    };
+    img.src = 'data:image/jpeg;base64,' + b64;
+  }
+
+  function clearCanvas() {
+    const oc = document.getElementById('canvasOverlay');
+    oc.getContext('2d').clearRect(0, 0, oc.width, oc.height);
+  }
+
+  // ── Sidebar update ────────────────────────────────────────────────────────
+  function updateSidebar(data, ms) {
+    document.getElementById('sCount').textContent  = data.count;
+    document.getElementById('sTracks').textContent = data.active_tracks;
+
+    // FPS (rolling)
+    const now = performance.now();
+    const fps = Math.round(1000 / (now - lastFPSTime));
+    lastFPSTime = now;
+    document.getElementById('sFPS').textContent = fps > 0 && fps < 999 ? fps : '—';
+
+    // Object list
+    const list = document.getElementById('objList');
+    if (data.objects.length === 0) {
+      list.innerHTML = '<div style="padding:12px 16px;font-size:0.78rem;color:var(--muted)">No objects detected.</div>';
+      return;
+    }
+    list.innerHTML = data.objects.map(o => `
+      <div class="obj-row">
+        <div class="obj-swatch" style="background:${o.color}"></div>
+        <span class="obj-label">${o.label}</span>
+        <span class="obj-id">#${o.id}</span>
+        <span class="obj-conf">${(o.confidence * 100).toFixed(0)}%</span>
+      </div>
+    `).join('');
+  }
+
+  // ── Controls ──────────────────────────────────────────────────────────────
+  function updateConf(v) {
+    confThreshold = v / 100;
+    document.getElementById('confVal').textContent = v + '%';
+  }
+
+  async function resetTracker() {
+    try {
+      await fetch(`${API}/reset_tracker`, { method: 'POST' });
+      frameCount = 0;
+      document.getElementById('sFrames').textContent = '0';
+      document.getElementById('sTracks').textContent = '0';
+      document.getElementById('sCount').textContent  = '0';
+      document.getElementById('objList').innerHTML = '<div style="padding:12px 16px;font-size:0.78rem;color:var(--muted)">No detections yet.</div>';
+      clearCanvas();
+      log('Tracker reset', 'log-info');
+      toast('Tracker reset', 'info');
+    } catch {
+      toast('Could not reach server', 'err');
+    }
+  }
+
+  // ── Init ──────────────────────────────────────────────────────────────────
+  checkHealth();
+</script>
+</body>
+</html>
